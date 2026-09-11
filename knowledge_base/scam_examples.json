@@ -1,0 +1,62 @@
+[
+  {
+    "id": "bank_001",
+    "category": "Banking Impersonation",
+    "message": "Your bank account has been suspended. Verify your account immediately by providing your OTP.",
+    "risk": "HIGH"
+  },
+  {
+    "id": "bank_002",
+    "category": "Banking Impersonation",
+    "message": "Your account will be blocked today unless you share your login credentials.",
+    "risk": "HIGH"
+  },
+  {
+    "id": "otp_001",
+    "category": "OTP Theft",
+    "message": "Please send the OTP you received to verify your account.",
+    "risk": "HIGH"
+  },
+  {
+    "id": "upi_001",
+    "category": "Financial Scam",
+    "message": "You have received a cashback reward. Click the link and enter your UPI PIN.",
+    "risk": "HIGH"
+  },
+  {
+    "id": "prize_001",
+    "category": "Prize Scam",
+    "message": "Congratulations! You won a cash prize. Pay a small processing fee to claim it.",
+    "risk": "HIGH"
+  },
+  {
+    "id": "delivery_001",
+    "category": "Delivery Scam",
+    "message": "Your package delivery failed. Click this link and update your payment details.",
+    "risk": "MEDIUM"
+  },
+  {
+    "id": "job_001",
+    "category": "Job Scam",
+    "message": "Earn money from home with no experience. Pay a registration fee to start immediately.",
+    "risk": "HIGH"
+  },
+  {
+    "id": "account_001",
+    "category": "Account Takeover",
+    "message": "Suspicious activity was detected. Confirm your password immediately to avoid account suspension.",
+    "risk": "HIGH"
+  },
+  {
+    "id": "safe_001",
+    "category": "Legitimate Message",
+    "message": "Your order has been successfully delivered. Thank you for shopping with us.",
+    "risk": "LOW"
+  },
+  {
+    "id": "safe_002",
+    "category": "Legitimate Message",
+    "message": "Your appointment is confirmed for tomorrow at 10 AM.",
+    "risk": "LOW"
+  }
+]
