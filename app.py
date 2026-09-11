@@ -1,14 +1,10 @@
-import streamlit as st
-import re
 import os
-import json
 import requests
-from urllib.parse import urlparse
+import streamlit as st
 
-
-# ===================================
-# IMPORT MODULAR AGENTS
-# ===================================
+# ============================================================
+# IMPORT SPECIALIZED AGENTS
+# ============================================================
 
 from agents.risk_agent import analyze_message
 from agents.social_agent import social_engineering_analysis
@@ -17,10 +13,16 @@ from agents.link_agent import link_analysis
 from agents.identity_agent import identity_analysis
 from agents.pattern_agent import scam_pattern_analysis
 
+# ============================================================
+# IMPORT RAG RETRIEVER
+# ============================================================
 
-# ===================================
+from rag.retriever import ScamRetriever
+
+
+# ============================================================
 # PAGE CONFIGURATION
-# ===================================
+# ============================================================
 
 st.set_page_config(
     page_title="BharatShield AI",
@@ -29,587 +31,255 @@ st.set_page_config(
 )
 
 
-# ===================================
-# AGENT ORCHESTRATOR
-# ===================================
+# ============================================================
+# LOAD RAG MODEL ONLY ONCE
+# ============================================================
 
-def plan_investigation(message):
-
-    text = message.lower()
-
-    plan = []
-
-    if "http://" in text or "https://" in text:
-        plan.append("🌐 Link Analysis Agent")
-
-    financial_words = [
-        "bank",
-        "payment",
-        "pay",
-        "upi",
-        "transfer",
-        "money",
-        "account",
-        "otp",
-        "pin",
-        "password",
-        "login",
-        "cvv",
-        "reward",
-        "prize"
-    ]
-
-    if any(word in text for word in financial_words):
-        plan.append("💳 Financial Risk Agent")
-
-    social_words = [
-        "urgent",
-        "immediately",
-        "immediate",
-        "now",
-        "blocked",
-        "suspended",
-        "within",
-        "verify",
-        "click"
-    ]
-
-    if any(word in text for word in social_words):
-        plan.append("🧠 Social Engineering Agent")
-
-    identity_words = [
-        "sbi",
-        "hdfc",
-        "icici",
-        "government",
-        "police",
-        "amazon",
-        "flipkart",
-        "google",
-        "instagram",
-        "whatsapp",
-        "microsoft"
-    ]
-
-    if any(word in text for word in identity_words):
-        plan.append("🎭 Identity / Impersonation Agent")
-
-    plan.append("🧩 Scam Pattern Agent")
-    plan.append("🤖 AI Investigation Agent")
-
-    return plan
+@st.cache_resource
+def load_retriever():
+    return ScamRetriever()
 
 
-# ===================================
-# DOMAIN VS IDENTITY ANALYSIS
-# ===================================
+# ============================================================
+# OPENROUTER API KEY
+# ============================================================
 
-def domain_identity_analysis(message, identity_results):
+def get_api_key():
 
-    findings = []
-
-    urls = re.findall(
-        r'https?://[^\s]+',
-        message
-    )
-
-    if not urls or not identity_results:
-        return findings
-
-    identity_keywords = {
-        "State Bank of India (SBI)": "sbi",
-        "HDFC Bank": "hdfc",
-        "ICICI Bank": "icici",
-        "Amazon": "amazon",
-        "Flipkart": "flipkart",
-        "Google": "google",
-        "Instagram": "instagram",
-        "WhatsApp": "whatsapp",
-        "Microsoft": "microsoft"
-    }
-
-    for url in urls:
-
-        domain = urlparse(url).netloc.lower()
-
-        for identity in identity_results:
-
-            if identity not in identity_keywords:
-                continue
-
-            identity_keyword = identity_keywords[identity]
-
-            if identity_keyword not in domain:
-
-                findings.append(
-                    f"The message references '{identity}', but the "
-                    f"submitted domain '{domain}' does not obviously "
-                    f"match that claimed identity."
-                )
-
-            else:
-
-                findings.append(
-                    f"The submitted domain contains a keyword related "
-                    f"to '{identity}', but this alone does not verify "
-                    f"authenticity."
-                )
-
-    return findings
+    try:
+        return st.secrets.get("OPENROUTER_API_KEY")
+    except Exception:
+        return os.getenv("OPENROUTER_API_KEY")
 
 
-# ===================================
-# IMPROVED RISK SCORING ENGINE
-# ===================================
+# ============================================================
+# AI REASONING
+# ============================================================
 
-def calculate_risk_score(
+def get_ai_reasoning(
     message,
-    risk_signals,
-    social_results,
-    financial_results,
-    link_results,
-    identity_results,
-    domain_results,
-    pattern_results
+    risk_score,
+    retrieved_examples,
+    api_key
 ):
-
-    text = message.lower()
-
-    score = 0
-
-    # -----------------------------------
-    # 1. BASIC AGENT FINDINGS
-    # -----------------------------------
-
-    score += min(
-        len(risk_signals) * 4,
-        15
-    )
-
-    score += min(
-        len(social_results) * 6,
-        15
-    )
-
-    score += min(
-        len(financial_results) * 7,
-        15
-    )
-
-    score += min(
-        len(link_results) * 4,
-        10
-    )
-
-    score += min(
-        len(domain_results) * 8,
-        15
-    )
-
-    score += min(
-        len(pattern_results) * 5,
-        10
-    )
-
-    if identity_results:
-        score += 5
-
-
-    # -----------------------------------
-    # 2. HIGH-SEVERITY SENSITIVE DATA
-    # -----------------------------------
-
-    sensitive_keywords = [
-        "otp",
-        "pin",
-        "password",
-        "cvv",
-        "login details",
-        "login credentials"
-    ]
-
-    sensitive_found = any(
-        keyword in text
-        for keyword in sensitive_keywords
-    )
-
-    if sensitive_found:
-        score += 20
-
-
-    # -----------------------------------
-    # 3. LOGIN / ACCOUNT CREDENTIALS
-    # -----------------------------------
-
-    credential_keywords = [
-        "login",
-        "username",
-        "account details",
-        "credentials"
-    ]
-
-    if any(
-        keyword in text
-        for keyword in credential_keywords
-    ):
-        score += 10
-
-
-    # -----------------------------------
-    # 4. URGENCY
-    # -----------------------------------
-
-    urgency_keywords = [
-        "urgent",
-        "immediately",
-        "immediate",
-        "now",
-        "today",
-        "last chance"
-    ]
-
-    urgency_found = any(
-        keyword in text
-        for keyword in urgency_keywords
-    )
-
-    if urgency_found:
-        score += 8
-
-
-    # -----------------------------------
-    # 5. THREAT / FEAR
-    # -----------------------------------
-
-    threat_keywords = [
-        "suspended",
-        "blocked",
-        "restricted",
-        "deactivated",
-        "penalty",
-        "failure"
-    ]
-
-    threat_found = any(
-        keyword in text
-        for keyword in threat_keywords
-    )
-
-    if threat_found:
-        score += 10
-
-
-    # -----------------------------------
-    # 6. STRONG COMBINATIONS
-    # -----------------------------------
-
-    # OTP/password + urgency
-
-    if sensitive_found and urgency_found:
-        score += 10
-
-
-    # Sensitive information + threat
-
-    if sensitive_found and threat_found:
-        score += 10
-
-
-    # Urgency + threat
-
-    if urgency_found and threat_found:
-        score += 8
-
-
-    # Claimed identity + sensitive request
-
-    if identity_results and sensitive_found:
-        score += 8
-
-
-    # Link + sensitive information
-
-    if link_results and sensitive_found:
-        score += 8
-
-
-    # -----------------------------------
-    # LIMIT SCORE
-    # -----------------------------------
-
-    score = min(score, 100)
-
-
-    # -----------------------------------
-    # RISK LEVEL
-    # -----------------------------------
-
-    if score >= 70:
-        level = "HIGH RISK"
-
-    elif score >= 40:
-        level = "MEDIUM RISK"
-
-    else:
-        level = "LOW RISK"
-
-    return score, level
-
-
-# ===================================
-# EVIDENCE AND UNCERTAINTY ENGINE
-# ===================================
-
-def evaluate_evidence(
-    risk_signals,
-    social_results,
-    financial_results,
-    link_results,
-    identity_results,
-    domain_results,
-    pattern_results
-):
-
-    observed = []
-    concerns = []
-    unknowns = []
-
-    if risk_signals:
-        observed.append(
-            "Risk-related indicators were found in the submitted content."
-        )
-
-    if link_results:
-        observed.append(
-            "A web link was detected and its visible domain was extracted."
-        )
-
-    if identity_results:
-        observed.append(
-            "The content references one or more recognizable organizations or platforms."
-        )
-
-    if social_results:
-        concerns.append(
-            "Possible pressure or social-engineering techniques were detected."
-        )
-
-    if financial_results:
-        concerns.append(
-            "Possible financial or sensitive-information risk was detected."
-        )
-
-    if domain_results:
-        concerns.append(
-            "The claimed identity and submitted domain require independent verification."
-        )
-
-    if pattern_results:
-        concerns.append(
-            "Multiple indicators form a potentially concerning interaction pattern."
-        )
-
-    unknowns.append(
-        "The sender's true identity cannot be confirmed from the submitted text alone."
-    )
-
-    unknowns.append(
-        "A suspicious-looking domain does not by itself prove fraud."
-    )
-
-    unknowns.append(
-        "No automated assessment should be treated as proof that something is definitely fraudulent or definitely safe."
-    )
-
-    if (
-        domain_results
-        and social_results
-        and financial_results
-        and pattern_results
-    ):
-
-        assessment = "HIGH CAUTION"
-
-        explanation = (
-            "Multiple independent categories of concerning indicators are present."
-        )
-
-    elif len(concerns) >= 2:
-
-        assessment = "NEEDS VERIFICATION"
-
-        explanation = (
-            "Multiple potential concerns were detected, but the available evidence does not independently confirm fraud."
-        )
-
-    else:
-
-        assessment = "INSUFFICIENT EVIDENCE"
-
-        explanation = (
-            "The submitted content does not provide enough reliable evidence for a strong conclusion."
-        )
-
-    return (
-        observed,
-        concerns,
-        unknowns,
-        assessment,
-        explanation
-    )
-
-
-# ===================================
-# AI INVESTIGATION AGENT
-# ===================================
-
-def ai_investigation(message):
-
-    api_key = os.getenv(
-        "OPENROUTER_API_KEY"
-    )
 
     if not api_key:
+        return None
 
-        return {
-            "error": (
-                "OpenRouter API key was not found. "
-                "Please set OPENROUTER_API_KEY and run Streamlit "
-                "from the same PowerShell terminal."
-            )
-        }
+    evidence_text = ""
 
-    url = (
-        "https://openrouter.ai/api/v1/chat/completions"
-    )
+    for item in retrieved_examples:
+
+        evidence_text += f"""
+Category: {item.get("category", "Unknown")}
+Known Example: {item.get("message", "")}
+Similarity: {item.get("similarity", 0)}
+Expected Risk: {item.get("risk", "Unknown")}
+
+"""
 
     prompt = f"""
 You are BharatShield AI, a digital safety investigation assistant.
 
-Analyze the suspicious message below carefully.
+Analyze the user's message using the evidence retrieved from a scam
+knowledge base.
 
-IMPORTANT RULES:
-
-1. Do not claim something is definitely a scam unless there is strong evidence.
-2. Separate observations from suspicions.
-3. Clearly state uncertainty.
-4. Identify possible impersonation claims.
-5. Identify what action the sender wants the recipient to take.
-6. Identify possible social-engineering techniques.
-7. Identify possible financial or sensitive-information risks.
-8. Provide safe next steps.
-9. Do not ask the user to click suspicious links.
-10. Do not invent facts about the sender or website.
-11. Return ONLY valid JSON.
-
-Return exactly this JSON structure:
-
-{{
-    "summary": "",
-    "claimed_identity": "",
-    "requested_action": "",
-    "social_engineering": [],
-    "financial_or_sensitive_risks": [],
-    "suspicious_indicators": [],
-    "uncertainties": [],
-    "recommended_actions": [],
-    "risk_assessment": "LOW / NEEDS VERIFICATION / HIGH CAUTION"
-}}
-
-Suspicious message:
-
+USER MESSAGE:
 {message}
+
+CURRENT RULE-BASED RISK SCORE:
+{risk_score}/100
+
+RETRIEVED RAG EVIDENCE:
+{evidence_text}
+
+Give a concise investigation explanation.
+
+Explain:
+1. Whether the message appears suspicious.
+2. Which scam techniques or patterns are present.
+3. How the message compares with retrieved examples.
+4. What the user should do safely.
+
+Do not claim that something is definitely a scam unless the evidence
+supports that conclusion. Use cautious language.
 """
 
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://bharatshield-ai.streamlit.app",
+        "X-Title": "BharatShield AI"
     }
 
     data = {
-        "model": "openrouter/free",
+        "model": "meta-llama/llama-3.3-70b-instruct:free",
         "messages": [
             {
                 "role": "user",
                 "content": prompt
             }
         ],
-        "temperature": 0.2
+        "temperature": 0.3
     }
 
     try:
 
         response = requests.post(
-            url,
+            "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=data,
-            timeout=90
+            timeout=30
         )
 
         if response.status_code != 200:
+            return None
 
-            return {
-                "error": (
-                    f"AI request failed with status code "
-                    f"{response.status_code}."
-                )
-            }
+        result = response.json()
 
-        response_data = response.json()
+        return result["choices"][0]["message"]["content"]
 
-        ai_text = (
-            response_data["choices"][0]["message"]["content"]
+    except Exception:
+        return None
+
+
+# ============================================================
+# CALCULATE RISK SCORE
+# ============================================================
+
+def calculate_risk_score(
+    risk_results,
+    social_results,
+    financial_results,
+    link_results,
+    identity_results,
+    pattern_results,
+    retrieved_examples
+):
+
+    score = 0
+
+    # --------------------------------------------------------
+    # SPECIALIZED AGENT SCORES
+    # --------------------------------------------------------
+
+    score += min(len(risk_results) * 4, 20)
+
+    score += min(len(social_results) * 6, 18)
+
+    score += min(len(financial_results) * 8, 24)
+
+    score += min(len(link_results) * 5, 15)
+
+    score += min(len(pattern_results) * 8, 25)
+
+    # --------------------------------------------------------
+    # RAG SIMILARITY SCORE
+    # --------------------------------------------------------
+
+    if retrieved_examples:
+
+        top_example = retrieved_examples[0]
+
+        similarity = float(
+            top_example.get("similarity", 0)
         )
 
-        ai_text = ai_text.strip()
+        retrieved_risk = (
+            top_example.get("risk", "")
+            .upper()
+        )
 
-        # Remove markdown code blocks if returned
+        # Strong semantic similarity to known scam
 
-        if ai_text.startswith("```"):
+        if (
+            similarity >= 0.80
+            and retrieved_risk == "HIGH"
+        ):
+            score += 25
 
-            ai_text = re.sub(
-                r"^```(?:json)?\s*",
-                "",
-                ai_text
-            )
+        elif (
+            similarity >= 0.65
+            and retrieved_risk == "HIGH"
+        ):
+            score += 18
 
-            ai_text = re.sub(
-                r"\s*```$",
-                "",
-                ai_text
-            )
+        elif similarity >= 0.50:
+            score += 10
 
-            ai_text = ai_text.strip()
+        # Similarity to known safe message
 
-        return json.loads(ai_text)
+        if (
+            similarity >= 0.80
+            and retrieved_risk == "LOW"
+        ):
+            score -= 15
 
-    except json.JSONDecodeError:
+    # --------------------------------------------------------
+    # KEEP SCORE BETWEEN 0 AND 100
+    # --------------------------------------------------------
 
-        return {
-            "error": (
-                "The AI returned an unexpected response format. "
-                "Please try again."
-            )
-        }
+    score = max(0, min(score, 100))
 
-    except requests.exceptions.Timeout:
-
-        return {
-            "error": (
-                "The AI request timed out. Please try again."
-            )
-        }
-
-    except Exception as error:
-
-        return {
-            "error": str(error)
-        }
+    return score
 
 
-# ===================================
-# MAIN USER INTERFACE
-# ===================================
+# ============================================================
+# RISK LEVEL
+# ============================================================
+
+def get_risk_level(score):
+
+    if score >= 70:
+        return "HIGH RISK", "🔴"
+
+    elif score >= 40:
+        return "MEDIUM RISK", "🟡"
+
+    elif score >= 15:
+        return "LOW RISK", "🟢"
+
+    else:
+        return "MINIMAL RISK", "🟢"
+
+
+# ============================================================
+# SAFETY RECOMMENDATIONS
+# ============================================================
+
+def get_safe_steps(score):
+
+    if score >= 70:
+
+        return [
+            "Do not share OTPs, passwords, PINs, or login credentials.",
+            "Do not click suspicious links.",
+            "Do not send money or make payments because of pressure.",
+            "Verify the sender independently using an official website or app.",
+            "Contact the relevant organization through official channels."
+        ]
+
+    elif score >= 40:
+
+        return [
+            "Verify the message independently before taking action.",
+            "Avoid clicking links until the sender is confirmed.",
+            "Do not share sensitive information.",
+            "Use official websites or apps to verify account notifications."
+        ]
+
+    else:
+
+        return [
+            "No strong scam indicators were detected.",
+            "Continue using normal digital safety precautions.",
+            "Verify unexpected requests independently."
+        ]
+
+
+# ============================================================
+# UI HEADER
+# ============================================================
 
 st.title("🛡️ BharatShield AI")
 
@@ -618,124 +288,166 @@ st.subheader(
 )
 
 st.write(
-    "Paste a suspicious message or link. BharatShield coordinates "
-    "multiple specialized agents to investigate potential digital "
-    "safety risks."
+    """
+Paste a suspicious message or link below. BharatShield combines
+specialized investigation agents with RAG-based comparison against
+known scam patterns.
+"""
 )
 
+st.divider()
 
-user_input = st.text_area(
+
+# ============================================================
+# USER INPUT
+# ============================================================
+
+message = st.text_area(
     "What would you like BharatShield to investigate?",
     placeholder="Paste a suspicious message or link here...",
     height=180
 )
 
 
-# ===================================
-# INVESTIGATION BUTTON
-# ===================================
+# ============================================================
+# INVESTIGATE BUTTON
+# ============================================================
 
-if st.button("🛡️ Investigate"):
+if st.button(
+    "🛡️ Investigate",
+    use_container_width=True
+):
 
-    if not user_input.strip():
+    if not message.strip():
 
         st.warning(
-            "Please enter a message or link first."
+            "Please enter a message or link to investigate."
         )
 
     else:
 
         with st.spinner(
-            "BharatShield agents are investigating..."
+            "BharatShield agents and RAG system are investigating..."
         ):
 
-            # AGENT 1
-            risk_signals = analyze_message(
-                user_input
+            # =================================================
+            # AGENT 1 - GENERAL RISK
+            # =================================================
+
+            risk_results = analyze_message(
+                message
             )
 
-            # ORCHESTRATOR
-            plan = plan_investigation(
-                user_input
-            )
 
-            # AGENT 2
+            # =================================================
+            # AGENT 2 - SOCIAL ENGINEERING
+            # =================================================
+
             social_results = social_engineering_analysis(
-                user_input
+                message
             )
 
-            # AGENT 3
+
+            # =================================================
+            # AGENT 3 - FINANCIAL RISK
+            # =================================================
+
             financial_results = financial_risk_analysis(
-                user_input
+                message
             )
 
-            # AGENT 4
+
+            # =================================================
+            # AGENT 4 - LINK ANALYSIS
+            # =================================================
+
             link_results = link_analysis(
-                user_input
+                message
             )
 
-            # AGENT 5
+
+            # =================================================
+            # AGENT 5 - IDENTITY ANALYSIS
+            # =================================================
+
             identity_results = identity_analysis(
-                user_input
+                message
             )
 
-            # DOMAIN ANALYSIS
-            domain_results = domain_identity_analysis(
-                user_input,
-                identity_results
-            )
 
-            # AGENT 6
+            # =================================================
+            # AGENT 6 - SCAM PATTERN ANALYSIS
+            # =================================================
+
             pattern_results = scam_pattern_analysis(
                 social_results,
                 financial_results,
                 link_results,
                 identity_results,
-                user_input
+                message
             )
 
-            # RISK SCORE
-            risk_score, risk_level = calculate_risk_score(
-                user_input,
-                risk_signals,
+
+            # =================================================
+            # RAG RETRIEVAL
+            # =================================================
+
+            retriever = load_retriever()
+
+            retrieved_examples = retriever.retrieve(
+                message,
+                top_k=3
+            )
+
+
+            # =================================================
+            # CALCULATE FINAL RISK SCORE
+            # =================================================
+
+            risk_score = calculate_risk_score(
+                risk_results,
                 social_results,
                 financial_results,
                 link_results,
                 identity_results,
-                domain_results,
-                pattern_results
-            )
-
-            # EVIDENCE ENGINE
-            (
-                observed,
-                concerns,
-                unknowns,
-                assessment,
-                explanation
-            ) = evaluate_evidence(
-                risk_signals,
-                social_results,
-                financial_results,
-                link_results,
-                identity_results,
-                domain_results,
-                pattern_results
-            )
-
-            # AI AGENT
-            ai_results = ai_investigation(
-                user_input
+                pattern_results,
+                retrieved_examples
             )
 
 
-        # ===================================
-        # RISK SCORE DASHBOARD
-        # ===================================
+            risk_level, emoji = get_risk_level(
+                risk_score
+            )
 
-        st.write(
-            "## 📊 BharatShield Risk Score"
+
+            # =================================================
+            # OPTIONAL AI REASONING
+            # =================================================
+
+            api_key = get_api_key()
+
+            ai_reasoning = get_ai_reasoning(
+                message,
+                risk_score,
+                retrieved_examples,
+                api_key
+            )
+
+
+        # =====================================================
+        # RESULTS HEADER
+        # =====================================================
+
+        st.divider()
+
+        st.header(
+            "📊 BharatShield Investigation Result"
         )
+
+
+        # =====================================================
+        # SCORE
+        # =====================================================
 
         col1, col2 = st.columns(2)
 
@@ -748,417 +460,205 @@ if st.button("🛡️ Investigate"):
 
         with col2:
 
-            if risk_level == "HIGH RISK":
+            st.subheader(
+                f"{emoji} {risk_level}"
+            )
 
-                st.error(
-                    "🔴 HIGH RISK"
-                )
-
-            elif risk_level == "MEDIUM RISK":
-
-                st.warning(
-                    "🟡 MEDIUM RISK"
-                )
-
-            else:
-
-                st.success(
-                    "🟢 LOW RISK"
-                )
 
         st.progress(
             risk_score / 100
         )
 
-        st.caption(
-            "The score is based on detected indicators and their combinations. "
-            "It is an investigation aid and not proof that a message is fraudulent."
-        )
+
+        # =====================================================
+        # RAG EVIDENCE
+        # =====================================================
 
         st.divider()
 
-
-        # ===================================
-        # INVESTIGATION PLAN
-        # ===================================
-
-        st.write(
-            "## 🤖 Investigation Plan"
+        st.header(
+            "🧠 RAG Scam Pattern Comparison"
         )
 
-        for agent in plan:
+        st.write(
+            """
+BharatShield searched its knowledge base for messages that are
+semantically similar to the submitted message.
+"""
+        )
 
-            st.write(
-                "• " + agent
+        for index, item in enumerate(
+            retrieved_examples,
+            start=1
+        ):
+
+            category = item.get(
+                "category",
+                "Unknown"
             )
+
+            example_message = item.get(
+                "message",
+                ""
+            )
+
+            similarity = item.get(
+                "similarity",
+                0
+            )
+
+            known_risk = item.get(
+                "risk",
+                "Unknown"
+            )
+
+            with st.expander(
+                f"Evidence Match {index} — "
+                f"{category} "
+                f"({similarity:.0%} similarity)"
+            ):
+
+                st.write(
+                    "**Known example:**"
+                )
+
+                st.write(
+                    example_message
+                )
+
+                st.write(
+                    f"**Knowledge-base risk level:** "
+                    f"{known_risk}"
+                )
+
+                st.write(
+                    f"**Semantic similarity:** "
+                    f"{similarity:.1%}"
+                )
+
+
+        # =====================================================
+        # AGENT FINDINGS
+        # =====================================================
 
         st.divider()
 
+        st.header(
+            "🔍 Specialized Agent Findings"
+        )
 
-        # ===================================
-        # AGENT RESULTS
-        # ===================================
 
-        if risk_signals:
+        agent_data = {
 
-            st.write(
-                "## 🚨 Risk Signal Agent"
+            "🛡️ Risk Agent":
+                risk_results,
+
+            "🧠 Social Engineering Agent":
+                social_results,
+
+            "💰 Financial Risk Agent":
+                financial_results,
+
+            "🔗 Link Analysis Agent":
+                link_results,
+
+            "🏢 Identity Analysis Agent":
+                identity_results,
+
+            "🔍 Scam Pattern Agent":
+                pattern_results
+        }
+
+
+        findings_detected = False
+
+
+        for agent_name, results in agent_data.items():
+
+            if results:
+
+                findings_detected = True
+
+                with st.expander(
+                    agent_name,
+                    expanded=True
+                ):
+
+                    for finding in results:
+
+                        st.write(
+                            f"• {finding}"
+                        )
+
+
+        if not findings_detected:
+
+            st.success(
+                "No strong risk indicators were detected by the specialized agents."
             )
 
-            for result in risk_signals:
 
-                st.write(
-                    "• " + result
-                )
-
-
-        if social_results:
-
-            st.write(
-                "## 🧠 Social Engineering Agent"
-            )
-
-            for result in social_results:
-
-                st.write(
-                    "• " + result
-                )
-
-
-        if financial_results:
-
-            st.write(
-                "## 💳 Financial Risk Agent"
-            )
-
-            for result in financial_results:
-
-                st.write(
-                    "• " + result
-                )
-
-
-        if link_results:
-
-            st.write(
-                "## 🌐 Link Analysis Agent"
-            )
-
-            for result in link_results:
-
-                st.write(
-                    "• " + result
-                )
-
-
-        if identity_results:
-
-            st.write(
-                "## 🎭 Identity Agent"
-            )
-
-            for identity in identity_results:
-
-                st.write(
-                    "• Claimed or referenced identity: "
-                    + identity
-                )
-
-
-        if domain_results:
-
-            st.write(
-                "## 🔎 Domain vs Identity Evidence"
-            )
-
-            for result in domain_results:
-
-                st.write(
-                    "• " + result
-                )
-
-
-        if pattern_results:
-
-            st.write(
-                "## 🧩 Scam Pattern Agent"
-            )
-
-            for result in pattern_results:
-
-                st.write(
-                    "• " + result
-                )
-
-
-        # ===================================
-        # AI INVESTIGATION
-        # ===================================
+        # =====================================================
+        # AI REASONING
+        # =====================================================
 
         st.divider()
 
-        st.write(
-            "## 🤖 AI Investigation Agent"
+        st.header(
+            "🤖 AI Investigation Reasoning"
         )
 
 
-        if "error" in ai_results:
-
-            st.warning(
-                ai_results["error"]
-            )
-
-        else:
+        if ai_reasoning:
 
             st.write(
-                "### 📝 AI Summary"
-            )
-
-            st.write(
-                ai_results.get(
-                    "summary",
-                    "No summary available."
-                )
-            )
-
-
-            if ai_results.get(
-                "claimed_identity"
-            ):
-
-                st.write(
-                    "### 🎭 Claimed Identity"
-                )
-
-                st.write(
-                    ai_results["claimed_identity"]
-                )
-
-
-            if ai_results.get(
-                "requested_action"
-            ):
-
-                st.write(
-                    "### 👉 Requested Action"
-                )
-
-                st.write(
-                    ai_results["requested_action"]
-                )
-
-
-            if ai_results.get(
-                "social_engineering"
-            ):
-
-                st.write(
-                    "### 🧠 AI Social Engineering Analysis"
-                )
-
-                for item in ai_results[
-                    "social_engineering"
-                ]:
-
-                    st.write(
-                        "• " + item
-                    )
-
-
-            if ai_results.get(
-                "financial_or_sensitive_risks"
-            ):
-
-                st.write(
-                    "### 💳 Financial / Sensitive Information Risks"
-                )
-
-                for item in ai_results[
-                    "financial_or_sensitive_risks"
-                ]:
-
-                    st.write(
-                        "• " + item
-                    )
-
-
-            if ai_results.get(
-                "suspicious_indicators"
-            ):
-
-                st.write(
-                    "### ⚠️ Suspicious Indicators"
-                )
-
-                for item in ai_results[
-                    "suspicious_indicators"
-                ]:
-
-                    st.write(
-                        "• " + item
-                    )
-
-
-            if ai_results.get(
-                "uncertainties"
-            ):
-
-                st.write(
-                    "### ❓ AI Uncertainties"
-                )
-
-                for item in ai_results[
-                    "uncertainties"
-                ]:
-
-                    st.write(
-                        "• " + item
-                    )
-
-
-            if ai_results.get(
-                "recommended_actions"
-            ):
-
-                st.write(
-                    "### 🛡️ AI Recommended Actions"
-                )
-
-                for item in ai_results[
-                    "recommended_actions"
-                ]:
-
-                    st.write(
-                        "• " + item
-                    )
-
-
-            if ai_results.get(
-                "risk_assessment"
-            ):
-
-                st.write(
-                    "### 🔍 AI Risk Assessment"
-                )
-
-                ai_risk = (
-                    ai_results[
-                        "risk_assessment"
-                    ]
-                    .upper()
-                    .strip()
-                )
-
-                if ai_risk == "HIGH CAUTION":
-
-                    st.error(
-                        "🟠 HIGH CAUTION"
-                    )
-
-                elif ai_risk == "NEEDS VERIFICATION":
-
-                    st.warning(
-                        "🟡 NEEDS VERIFICATION"
-                    )
-
-                else:
-
-                    st.info(
-                        "⚪ " + ai_risk
-                    )
-
-
-        # ===================================
-        # EVIDENCE & UNCERTAINTY
-        # ===================================
-
-        st.divider()
-
-        st.write(
-            "## ⚖️ Evidence & Uncertainty Analysis"
-        )
-
-
-        st.write(
-            "### ✅ What We Observed"
-        )
-
-        for item in observed:
-
-            st.write(
-                "• " + item
-            )
-
-
-        st.write(
-            "### ⚠️ Potential Concerns"
-        )
-
-        for item in concerns:
-
-            st.write(
-                "• " + item
-            )
-
-
-        st.write(
-            "### ❓ What We Cannot Yet Verify"
-        )
-
-        for item in unknowns:
-
-            st.write(
-                "• " + item
-            )
-
-
-        # ===================================
-        # OVERALL ASSESSMENT
-        # ===================================
-
-        st.divider()
-
-        st.write(
-            "## 🔍 Overall Risk Assessment"
-        )
-
-
-        if assessment == "HIGH CAUTION":
-
-            st.error(
-                "🟠 HIGH CAUTION — "
-                + explanation
-            )
-
-        elif assessment == "NEEDS VERIFICATION":
-
-            st.warning(
-                "🟡 NEEDS VERIFICATION — "
-                + explanation
+                ai_reasoning
             )
 
         else:
 
             st.info(
-                "⚪ INSUFFICIENT EVIDENCE — "
-                + explanation
+                """
+AI reasoning is currently unavailable. The rule-based agents and
+RAG comparison still completed the investigation successfully.
+"""
             )
 
 
-        # ===================================
+        # =====================================================
         # SAFE NEXT STEPS
-        # ===================================
+        # =====================================================
 
         st.divider()
 
-        st.write(
-            "## 🛡️ Safe Next Steps"
+        st.header(
+            "🛡️ Safe Next Steps"
         )
 
-        st.write(
-            "• Do not rush into making payments.\n"
-            "• Do not share OTPs, PINs, passwords, or sensitive information.\n"
-            "• Do not click suspicious links.\n"
-            "• Verify suspicious requests independently using official contact information.\n"
-            "• Treat automated analysis as guidance, not proof."
+
+        safe_steps = get_safe_steps(
+            risk_score
+        )
+
+
+        for step in safe_steps:
+
+            st.write(
+                f"• {step}"
+            )
+
+
+        # =====================================================
+        # DISCLAIMER
+        # =====================================================
+
+        st.divider()
+
+        st.caption(
+            """
+BharatShield provides an automated risk assessment based on detected
+indicators, specialized agents, and similarity to examples in its
+knowledge base. It is an investigation aid and does not guarantee that
+a message is legitimate or fraudulent.
+"""
         )
